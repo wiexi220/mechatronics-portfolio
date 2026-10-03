@@ -1,0 +1,265 @@
+(* ============================================================
+   王宁论文：径向滑动轴承压力分布
+   有限差分法 - SOR迭代求解
+   改进版 v2.0
+   ============================================================ *)
+   
+ClearAll["Global`*"];
+
+(* ============================================================
+   第1部分：计算参数设置
+   ============================================================ *)
+(* --- 基本几何与物理参数 --- *)
+ε      = 0.8;      (* 偏心率 (0~1)，越大偏心越严重 *)
+Bd     = 1.0;      (* 宽径比 L/D *)
+Nθ     = 72;       (* 周向网格数 (建议≥36) *)
+Nz     = 25;       (* 轴向网格数 (建议≥11) *)
+η      = 0.048;    (* 润滑油动力粘度 [Pa·s]，矿物油约0.03~0.1 *)
+R      = 0.05;     (* 轴颈半径 [m] *)
+L      = Bd * 2 R; (* 轴承宽度 [m] *)
+ω      = 0.025;    (* 轴颈角速度 [rad/s] *)
+c      = 0.00012;  (* 半径间隙 [m] *)
+
+(* --- 迭代收敛参数 --- *)
+ωSOR   = 1.5;      (* SOR松弛因子 (1≤ω<2)，1.5~1.8常用 *)
+errMax = 10^-5;    (* 收敛精度 *)
+maxIter= 20000;    (* 最大迭代次数 *)
+
+(* ============================================================
+   第2部分：计算辅助函数
+   ============================================================ *)
+(* 无量纲油膜厚度 H = h/c = 1 + ε*cos(θ) *)
+H[θ_] := 1 - ε Cos[θ]
+
+(* 解析解基准（无限宽轴承，验证数值解用） *)
+P_analytical[θ_, z_, ε_] :=
+  (6 η ω R (1 + ε Cos[θ]) / c^2) * 
+  (L^2/4 - z^2) / (2 L) * 
+  (ε Sin[θ]) / (1 - ε Cos[θ])^2 // Simplify
+
+(* ============================================================
+   第3部分：网格初始化
+   ============================================================ *)
+Print["[1/5] 初始化网格..."];
+
+(* 角度网格 θ ∈ [0, 2π) *)
+θList = Table[2π i / Nθ, {i, 0, Nθ - 1}];
+(* 轴向网格 z ∈ [-L/2, L/2] *)
+zList = Table[-L/2 + L j / (Nz - 1), {j, 0, Nz - 1}];
+
+(* 生成无量纲油膜厚度场 H(θ) *)
+Hmat = Table[H[θList[[i]]], {i, Nθ}, {j, Nz}];
+
+(* 压力场初始化为0 *)
+P = ConstantArray[0., {Nθ, Nz}];
+
+(* ============================================================
+   第4部分：SOR迭代求解 Reynolds方程（有限差分）
+   ============================================================ *)
+Print["[2/5] SOR迭代求解中..."];
+Print["  偏心率 ε = ", ε, " | 宽径比 Bd = ", Bd];
+Print["  网格 ", Nθ, "×", Nz, " | 松弛因子 ω = ", ωSOR];
+
+iter = 0; err = 1; errHistory = {};
+
+While[err > errMax && iter < maxIter,
+  Pold = P;
+  
+  (* --- 遍历内部节点 (i=2..Nθ-1, j=2..Nz-1) --- *)
+  Do[
+   iP = i; jP = j;
+   
+   (* 油膜厚度及其立方 *)
+   Hi  = Hmat[[iP, jP]];
+   Hi3 = Hi^3;
+   
+   (* 有限差分系数（中心差分） *)
+   (* 正确形式：div(h^3 grad P) = d/dθ(h^3 dP/dθ) + Bd^2 * d/dz(h^3 dP/dz) *)
+   
+   (* 东、西、南、北邻居的系数 *)
+   Ce = Hi3 / (θList[[iP+1]] - θList[[iP-1]]) / 2;  (* 简化处理 *)
+   Cw = Hi3 / (θList[[iP]] - θList[[iP-1]]) / 2;
+   Cn = Hi3 Bd^2 / (zList[[jP+1]] - zList[[jP-1]]) / 2;
+   Cs = Hi3 Bd^2 / (zList[[jP]] - zList[[jP-1]]) / 2;
+   
+   (* 源项：由油膜厚度梯度产生 *)
+   b  = (Hmat[[iP+1, jP]] - Hmat[[iP-1, jP]]) / 2;
+   
+   (* SOR迭代更新 *)
+   Pij_new = (1 - ωSOR) P[[iP, jP]] 
+             + ωSOR * (Ce P[[iP+1, jP]] + Cw P[[iP-1, jP]] 
+                     + Cn P[[iP, jP+1]] + Cs P[[iP, jP-1]] + b) 
+             / (Ce + Cw + Cn + Cs);
+   
+   (* 雷诺边界条件：油膜破裂区压力置0 *)
+   P[[iP, jP]] = Max[0., Pij_new];
+   
+  , {j, 2, Nz-1}
+  , {i, 2, Nθ-1}];
+  
+  iter++;
+  err = Max[Abs[Flatten[P - Pold]]];
+  
+  (* 记录收敛过程 *)
+  If[Mod[iter, 500] == 0,
+   AppendTo[errHistory, {iter, err}];
+   Print["  迭代 ", iter, " | 误差 ", ScientificForm[err]]
+  ];
+];
+
+(* ============================================================
+   第5部分：结果输出
+   ============================================================ *)
+Print[""];
+Print["========================================"];
+Print["            计算完成 - 结果汇总            "];
+Print["========================================"];
+Print["  迭代次数   : ", iter];
+Print["  收敛误差   : ", ScientificForm[err]];
+Print["  偏心率     : ", ε];
+Print["  最小油膜厚度: ", NumberForm[Min[Flatten[Hmat]], 4], " (无量纲)"];
+Print["  最大压力   : ", NumberForm[Max[Flatten[P]], 4], " Pa"];
+Print["========================================"];
+
+(* ============================================================
+   第6部分：承载量计算
+   ============================================================ *)
+Print[""];
+Print["[3/5] 计算承载量..."];
+
+(* 将无量纲压力转为实际压力 P_real = P_calc * (ηωR/c^2) * L^2/(2π) *)
+scaleFactor = (η ω R) / c^2;
+Preal = scaleFactor * P;
+
+(* 数值积分求承载量 W *)
+dθ = 2π / Nθ;
+dz = L / (Nz - 1);
+
+(* 分解为 x 方向和 y 方向承载力 *)
+Wx = 0; Wy = 0;
+Do[
+  Do[
+    p = Preal[[i, j]];
+    θ = θList[[i]];
+    z = zList[[j]];
+    
+    (* 压力在 x, y 方向的分解 *)
+    Wx += p Cos[θ] * R * dθ * dz;
+    Wy += p Sin[θ] * R * dθ * dz;
+  , {j, 1, Nz}]
+, {i, 1, Nθ}];
+
+W = Sqrt[Wx^2 + Wy^2];
+
+Print["  承载量 W = ", NumberForm[W, 4], " N"];
+Print["  X方向分力 = ", NumberForm[Wx, 4], " N"];
+Print["  Y方向分力 = ", NumberForm[Wy, 4], " N"];
+Print["  偏位角 φ = ", NumberForm[ArcTan[Wx, -Wy] * 180/π, 4], "°"];
+
+(* ============================================================
+   第7部分：可视化
+   ============================================================ *)
+Print[""];
+Print["[4/5] 生成可视化图表..."];
+
+(* --- 7.1 三维压力分布 --- *)
+p3d = ListPlot3D[Preal,
+   PlotLabel -> Style["油膜压力分布 三维视图\n(ε=" <> ToString[ε] <> ", Bd=" <> ToString[Bd] <> ")", 14, Bold],
+   AxesLabel -> {Style["轴向位置 z", 10], Style["周向角度 θ", 10], Style["压力 P [Pa]", 10]},
+   ColorFunction -> (ColorData["DeepSeaColors"][#3] &),
+   Filling -> Bottom,
+   Mesh -> {30, 20},
+   MeshStyle -> Opacity[0.3],
+   PlotRange -> {Full, Full, {0, All}},
+   ImageSize -> 700,
+   Background -> Lighter[Gray, 0.9],
+   BoxRatios -> {1, 1, 0.6}
+ ];
+
+(* --- 7.2 极坐标压力分布 (周向截面) --- *)
+midZ = Floor[Nz/2];  (* 取中间截面 *)
+PθMid = Table[{θList[[i]] * 180/π, Preal[[i, midZ]]}, {i, 1, Nθ}];
+
+pPolar = ListPolarPlot[
+   PθMid,
+   PlotLabel -> Style["中间截面压力分布 (极坐标)", 13, Bold],
+   PlotStyle -> {Red, Thickness[0.003]},
+   Filling -> Axis,
+   FillingStyle -> Directive[Red, Opacity[0.3]],
+   PolarAxes -> True,
+   PolarGridLines -> {Range[0, 2π, π/6], Automatic},
+   ImageSize -> 500
+ ];
+
+(* --- 7.3 等高线图 --- *)
+pContour = ListContourPlot[Transpose[Preal],
+   PlotLabel -> Style["油膜压力 等高线图", 13, Bold],
+   Contours -> 15,
+   ColorFunction -> "TemperatureMap",
+   FrameLabel -> {Style["轴向位置", 10], Style["周向位置", 10]},
+   PlotLegends -> Placed[BarLegend[Automatic, LegendLabel -> "P [Pa]"], Right],
+   ImageSize -> 500,
+   FrameTicks -> None
+ ];
+
+(* --- 7.4 压力沿周向变化曲线（多截面） --- *)
+pCurve = Plot[
+   {
+    Evaluate@Table[P_analytical[θ, 0, ε] * (η ω R / c^2), {ε, {0.5, 0.7, 0.9}}]
+   },
+   {θ, 0, 2π},
+   PlotLabel -> Style["解析解参考（无限宽轴承）", 12],
+   PlotLegends -> {"ε=0.5", "ε=0.7", "ε=0.9"},
+   AxesLabel -> {Style["θ [rad]", 10], Style["P", 10]},
+   ImageSize -> 500,
+   PlotRange -> All
+ ];
+
+(* --- 7.5 收敛过程图 --- *)
+If[Length[errHistory] > 1,
+ pConv = ListLogPlot[errHistory,
+   PlotLabel -> Style["SOR迭代收敛过程", 13, Bold],
+   AxesLabel -> {Style["迭代次数", 10], Style["误差", 10]},
+   Joined -> True,
+   PlotStyle -> Blue,
+   ImageSize -> 400,
+   PlotRange -> All
+ ];
+, pConv = Graphics[Text["收敛曲线"]]];
+
+(* ============================================================
+   第8部分：组合输出
+   ============================================================ *)
+Print[""];
+Print["[5/5] 渲染最终图表..."];
+
+(* 合并所有图 *)
+finalPlot = Grid[{
+   {p3d, SpanFromLeft},
+   {pPolar, pContour, pCurve},
+   {pConv, SpanFromLeft}
+  },
+  Spacings -> 2,
+  Frame -> True,
+  FrameStyle -> Gray
+ ];
+
+(* 输出到文件 *)
+Export["bearing_pressure_result.pdf", finalPlot];
+Export["bearing_pressure_3d.png", p3d];
+Export["bearing_P_θ.csv", PθMid];
+Export["bearing_full_data.csv", Preal];
+
+Print[""];
+Print["========================================"];
+Print["  导出文件:                                  "];
+Print["  - bearing_pressure_result.pdf (综合图)  "];
+Print["  - bearing_pressure_3d.png (3D图)         "];
+Print["  - bearing_P_θ.csv (周向压力数据)         "];
+Print["  - bearing_full_data.csv (全场数据)        "];
+Print["========================================"];
+Print["           ✅ 计算与可视化完成              "];
+Print["========================================"];
+
+(* 显示最终图表 *)
+finalPlot

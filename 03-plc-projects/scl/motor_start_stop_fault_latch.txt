@@ -1,0 +1,57 @@
+// ============================================
+// 程序块：电机启停控制 + 故障保护
+// 作者：克劳（Claw）
+// 日期：2026-03-29
+// 适用：S7-1200 / S7-1500，TIA Portal V16+
+// ============================================
+
+// ---------- 输入变量（映射到实际IO）----------
+VAR_INPUT
+    SB_Start  : BOOL;   // I0.0 启动按钮
+    SB_Stop   : BOOL;   // I0.1 停止按钮（程序内用常开，接线用常闭）
+    FR_Trip   : BOOL;   // I0.2 热继电器故障
+    SB_Reset  : BOOL;   // I0.3 复位按钮
+END_VAR
+
+// ---------- 输出变量 ----------
+VAR_OUTPUT
+    KM_Motor  : BOOL;   // Q0.0 电机接触器
+    HL_Run    : BOOL;   // Q0.1 运行绿灯
+    HL_Fault  : BOOL;   // Q0.2 故障红灯
+END_VAR
+
+// ---------- 内部变量 ----------
+VAR
+    M_Run     : BOOL;   // 运行状态位
+    M_Fault   : BOOL;   // 故障锁存位
+END_VAR
+
+// ============================================
+// 主程序逻辑
+// ============================================
+
+// 1. 故障检测：热继电器触发 → 锁存故障，停机
+IF FR_Trip THEN
+    M_Fault := TRUE;
+    M_Run   := FALSE;
+END_IF;
+
+// 2. 故障复位：手动按复位按钮才能清除
+IF SB_Reset THEN
+    M_Fault := FALSE;
+END_IF;
+
+// 3. 启动逻辑：无故障 + 按启动 + 停止未按
+IF SB_Start AND NOT SB_Stop AND NOT M_Fault THEN
+    M_Run := TRUE;
+END_IF;
+
+// 4. 停止逻辑：按下停止按钮
+IF SB_Stop THEN
+    M_Run := FALSE;
+END_IF;
+
+// 5. 输出驱动
+KM_Motor := M_Run;
+HL_Run   := M_Run;
+HL_Fault := M_Fault;
